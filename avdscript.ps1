@@ -57,3 +57,14 @@ ForEach ($App in $AppList) {
         Write-Host "Unable to find provisioned package: $App"
     }
 }
+
+# Bereitstellung für neue Benutzer entfernen
+Get-AppxProvisionedPackage -Online |
+    Where-Object { $_.DisplayName -eq "MSTeams" } |
+    ForEach-Object {
+        Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName
+    }
+
+# Teams für alle bestehenden Benutzer entfernen
+Get-AppxPackage -Name MSTeams -AllUsers |
+    Remove-AppxPackage -AllUsers
