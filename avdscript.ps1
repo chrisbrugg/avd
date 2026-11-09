@@ -33,7 +33,6 @@ $AppList = @(
     "Microsoft.XboxIdentityProvider",
     "Microsoft.XboxSpeechToTextOverlay",
     "Microsoft.XboxApp",
-    "Microsoft.XboxGameCallableUI",
     "SpotifyAB.SpotifyMusic",
     "Disney.37853FC22B2CE",
     "Clipchamp.Clipchamp",
