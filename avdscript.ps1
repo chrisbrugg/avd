@@ -1,10 +1,37 @@
-Set-SmbClientConfiguration -EncryptionCiphers "AES_256_GCM" -Confirm:$false
+# SMB-Verschlüsselungs-Cipher setzen
+try {
+    Set-SmbClientConfiguration `
+        -EncryptionCiphers "AES_256_GCM" `
+        -Confirm:$false `
+        -ErrorAction Stop
+}
+catch {
+    Write-Warning "SMB-Cipher konnte nicht gesetzt werden: $($_.Exception.Message)"
+}
 
-Add-LocalGroupMember `
-    -Group "FSLogix Profile Exclude List" `
-    -Member "$env:COMPUTERNAME\avdadmin"
+# avdadmin in die FSLogix-Exclude-Gruppe aufnehmen, falls nötig
+try {
+    $GroupName = "FSLogix Profile Exclude List"
+    $UserName  = "$env:COMPUTERNAME\avdadmin"
 
-$AppList = @(
+    $Group = Get-LocalGroup -Name $GroupName -ErrorAction Stop
+    $IsMember = Get-LocalGroupMember -Group $GroupName -ErrorAction Stop |
+        Where-Object { $_.Name -ieq $UserName }
+
+    if (-not $IsMember) {
+        Add-LocalGroupMember -Group $GroupName -Member $UserName -ErrorAction Stop
+        Write-Host "Benutzer hinzugefügt: $UserName -> $GroupName"
+    }
+    else {
+        Write-Host "Benutzer ist bereits Mitglied: $UserName -> $GroupName"
+    }
+}
+catch {
+    Write-Warning "FSLogix-Gruppe oder Mitgliedschaft konnte nicht verarbeitet werden: $($_.Exception.Message)"
+}
+
+# Apps, die aus bestehenden Benutzerprofilen und dem Image entfernt werden sollen
+$AppNames = @(
     "Microsoft.BingNews",
     "Microsoft.BingWeather",
     "Microsoft.GetHelp",
@@ -36,35 +63,59 @@ $AppList = @(
     "SpotifyAB.SpotifyMusic",
     "Disney.37853FC22B2CE",
     "Clipchamp.Clipchamp",
-    "TikTok.TikTok"
-)
+    "TikTok.TikTok",
+    "MSTeams"
+) | Select-Object -Unique
 
-ForEach ($App in $AppList) {
-    $AppFullName = (Get-AppxPackage -AllUsers | Where-Object {$_.Name -eq $App}).PackageFullName
-    $ProAppFullName = (Get-AppxProvisionedPackage -Online | Where-Object {$_.DisplayName -eq $App}).PackageName
-    
-    if ($AppFullName) {
-        Write-Host "Removing package: $App"
-        Remove-AppxPackage -Package $AppFullName -AllUsers
-    } else {
-        Write-Host "Unable to find package: $App"
-    }
-    
-    if ($ProAppFullName) {
-        Write-Host "Removing provisioned package: $ProAppFullName"
-        Remove-AppxProvisionedPackage -Online -PackageName $ProAppFullName
-    } else {
-        Write-Host "Unable to find provisioned package: $App"
-    }
+# Einmal Bestandslisten abrufen; Pakete danach einzeln entfernen
+try {
+    $InstalledPackages = @(Get-AppxPackage -AllUsers -ErrorAction Stop)
+}
+catch {
+    $InstalledPackages = @()
+    Write-Warning "Installierte Appx-Pakete konnten nicht aufgelistet werden: $($_.Exception.Message)"
 }
 
-# Bereitstellung für neue Benutzer entfernen
-Get-AppxProvisionedPackage -Online |
-    Where-Object { $_.DisplayName -eq "MSTeams" } |
-    ForEach-Object {
-        Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName
+try {
+    $ProvisionedPackages = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop)
+}
+catch {
+    $ProvisionedPackages = @()
+    Write-Warning "Bereitgestellte Appx-Pakete konnten nicht aufgelistet werden: $($_.Exception.Message)"
+}
+
+foreach ($AppName in $AppNames) {
+    $InstalledMatches = @($InstalledPackages | Where-Object { $_.Name -eq $AppName })
+
+    foreach ($Package in $InstalledMatches) {
+        try {
+            Write-Host "Entferne installiertes Paket: $($Package.PackageFullName)"
+            Remove-AppxPackage `
+                -Package $Package.PackageFullName `
+                -AllUsers `
+                -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Paket konnte nicht entfernt werden ($($Package.PackageFullName)): $($_.Exception.Message)"
+        }
     }
 
-# Teams für alle bestehenden Benutzer entfernen
-Get-AppxPackage -Name MSTeams -AllUsers |
-    Remove-AppxPackage -AllUsers
+    $ProvisionedMatches = @($ProvisionedPackages | Where-Object { $_.DisplayName -eq $AppName })
+
+    foreach ($Package in $ProvisionedMatches) {
+        try {
+            Write-Host "Entferne bereitgestelltes Paket: $($Package.PackageName)"
+            Remove-AppxProvisionedPackage `
+                -Online `
+                -PackageName $Package.PackageName `
+                -ErrorAction Stop | Out-Null
+        }
+        catch {
+            Write-Warning "Bereitgestelltes Paket konnte nicht entfernt werden ($($Package.PackageName)): $($_.Exception.Message)"
+        }
+    }
+
+    if (($InstalledMatches.Count -eq 0) -and ($ProvisionedMatches.Count -eq 0)) {
+        Write-Host "Nicht vorhanden, übersprungen: $AppName"
+    }
+}
